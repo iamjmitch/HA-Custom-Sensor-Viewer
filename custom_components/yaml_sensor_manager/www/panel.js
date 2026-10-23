@@ -36,6 +36,47 @@ const ICONS = {
   running: "mdi:play-circle",
 };
 
+const POWER = [
+  {
+    icon: "mdi:check-decagram",
+    title: "Check configuration",
+    desc: "Validate your YAML without changing anything.",
+    domain: "homeassistant",
+    service: "check_config",
+    ok: "Configuration is valid",
+    stay: true,
+  },
+  {
+    icon: "mdi:file-refresh",
+    title: "Reload template entities",
+    desc: "Applies template sensor changes. No downtime.",
+    domain: "template",
+    service: "reload",
+    ok: "Templates reloaded",
+  },
+  {
+    icon: "mdi:reload",
+    title: "Reload all YAML",
+    desc: "Reloads core, templates, automations, scripts and more.",
+    domain: "homeassistant",
+    service: "reload_all",
+    ok: "YAML reloaded",
+  },
+  {
+    icon: "mdi:restart",
+    title: "Restart Home Assistant",
+    desc: "Needed for sensor platforms in configuration.yaml. Checks the config first.",
+    domain: "homeassistant",
+    service: "restart",
+    ok: "Restarting... the panel will reconnect",
+    danger: true,
+    confirm: "Restart Home Assistant now?",
+  },
+];
+
+const PACKAGES_SNIPPET = `homeassistant:
+  packages: !include_dir_named packages`;
+
 const PLACEHOLDER = `# Paste a sensor, a list, or a whole template: block
 - name: Example Double
   unique_id: example_double
@@ -140,7 +181,7 @@ const CSS = `
   pre{margin:8px 0 0;padding:12px;border-radius:10px;overflow:auto;font-size:12px;
     line-height:1.5;max-height:300px;
     background:var(--secondary-background-color);border:1px solid var(--divider-color)}
-  .actions{display:flex;gap:8px;margin-top:12px}
+  .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 
   .empty{text-align:center;padding:48px 16px;color:var(--secondary-text-color);
     border:2px dashed var(--divider-color);border-radius:var(--ysm-radius)}
@@ -148,6 +189,10 @@ const CSS = `
     margin:0 auto 8px}
   .banner{padding:12px 14px;border-radius:12px;margin-bottom:14px;color:#fff;
     background:linear-gradient(120deg,#ef4444,#db2777)}
+  .banner.warn{background:linear-gradient(120deg,#f59e0b,#ea580c);
+    display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .banner.warn .msg{flex:1;min-width:220px;font-size:14px;line-height:1.5}
+  .banner pre{color:var(--primary-text-color);max-height:none}
 
   .overlay{position:fixed;inset:0;background:#0009;backdrop-filter:blur(3px);
     z-index:20;display:flex;align-items:center;justify-content:center;padding:12px}
@@ -155,320 +200,4 @@ const CSS = `
     max-width:680px;max-height:95vh;overflow:auto;
     box-shadow:0 20px 60px #0008}
   .mhead{padding:16px 20px;color:#fff;font-size:18px;font-weight:600;
-    display:flex;align-items:center;gap:10px;
-    background:linear-gradient(120deg,#2563eb,#7c3aed)}
-  .mbody{padding:18px 20px 20px}
-  textarea{width:100%;height:300px;padding:12px;resize:vertical;
-    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;
-    line-height:1.5;border-radius:12px;tab-size:2;outline:none;
-    border:1px solid var(--divider-color);
-    background:var(--secondary-background-color);color:var(--primary-text-color)}
-  textarea:focus{border-color:var(--ysm-purple);box-shadow:0 0 0 3px #8b5cf633}
-  select{font:inherit;padding:6px 10px;border-radius:8px;
-    background:var(--secondary-background-color);color:var(--primary-text-color);
-    border:1px solid var(--divider-color)}
-  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-  .hint{font-size:12px;color:var(--secondary-text-color);margin:10px 0;line-height:1.5}
-  .hint code{background:var(--secondary-background-color);padding:1px 5px;
-    border-radius:4px}
-  .err{color:var(--ysm-red);font-size:13px;margin:8px 0;white-space:pre-wrap}
-  .foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
-
-  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
-    z-index:30;padding:10px 18px;border-radius:24px;color:#fff;font-weight:500;
-    background:var(--ysm-green);box-shadow:0 6px 20px #0006;
-    animation:pop .25s ease}
-  .toast.bad{background:var(--ysm-red)}
-  @keyframes pop{from{opacity:0;transform:translate(-50%,12px)}}
-</style>`;
-
-const icon = (name) => `<ha-icon icon="${esc(name)}"></ha-icon>`;
-
-class YsmPanel extends HTMLElement {
-  set hass(hass) {
-    const first = !this._hass;
-    this._hass = hass;
-    if (first) this._init();
-  }
-
-  _init() {
-    this._tab = "managed";
-    this._q = "";
-    this._data = { yaml: [], managed: [] };
-    this.innerHTML = `${CSS}
-      <div class="wrap">
-        <div class="hero">
-          <div class="hero-top">
-            <h1>${icon("mdi:code-braces-box")} Custom Sensor Viewer</h1>
-            <button class="btn-ghost" id="refresh">${icon("mdi:refresh")}Refresh</button>
-            <button class="btn-white" id="add">${icon("mdi:plus")}Add sensor</button>
-          </div>
-          <p>View, add and edit your YAML template sensors.</p>
-          <div class="stats" id="stats"></div>
-        </div>
-        <div class="toolbar">
-          <div class="searchbox">
-            ${icon("mdi:magnify")}
-            <input class="search" id="q" placeholder="Search name, id, template...">
-          </div>
-          <div class="tabs" id="tabs"></div>
-        </div>
-        <div id="banner"></div>
-        <div id="list"></div>
-      </div>
-      <div id="modal"></div>
-      <div id="toast"></div>`;
-    this.querySelector("#add").onclick = () => this._edit({});
-    this.querySelector("#refresh").onclick = () => this._load();
-    this.querySelector("#q").oninput = (e) => {
-      this._q = e.target.value.toLowerCase();
-      this._render();
-    };
-    this._load();
-  }
-
-  _toast(msg, bad = false) {
-    const t = this.querySelector("#toast");
-    t.innerHTML = `<div class="toast ${bad ? "bad" : ""}">${esc(msg)}</div>`;
-    clearTimeout(this._tt);
-    this._tt = setTimeout(() => (t.innerHTML = ""), 2800);
-  }
-
-  async _load() {
-    const banner = this.querySelector("#banner");
-    banner.innerHTML = "";
-    try {
-      this._data = await this._hass.callWS({ type: "ysm/list" });
-    } catch (e) {
-      banner.innerHTML = `<div class="banner">Load failed: ${esc(e.message)}</div>`;
-    }
-    this._render();
-  }
-
-  _live(cfg, type) {
-    const states = this._hass.states;
-    if (!cfg.name) return null;
-    const guess = states[`${type}.${slug(cfg.name)}`];
-    if (guess) return guess;
-    for (const id in states) {
-      if (states[id].attributes.friendly_name === cfg.name) return states[id];
-    }
-    return null;
-  }
-
-  _iconFor(cfg, type) {
-    if (typeof cfg.icon === "string" && cfg.icon.startsWith("mdi:")) {
-      return cfg.icon;
-    }
-    return (
-      ICONS[cfg.device_class] ||
-      (type === "binary_sensor" ? "mdi:toggle-switch" : "mdi:eye")
-    );
-  }
-
-  _pill(live, cfg) {
-    if (!live) return "";
-    const st = live.state;
-    const unit = cfg.unit_of_measurement || live.attributes.unit_of_measurement || "";
-    let cls = "";
-    if (st === "unavailable" || st === "unknown") cls = "bad";
-    else if (st === "on") cls = "on";
-    else if (st === "off") cls = "off";
-    return `<span class="pill ${cls}">${esc(st)}${unit ? " " + esc(unit) : ""}</span>`;
-  }
-
-  _render() {
-    const all = [...this._data.managed, ...this._data.yaml];
-    let liveCount = 0;
-    for (const s of all) if (this._live(s.config, s.type)) liveCount++;
-    this.querySelector("#stats").innerHTML = `
-      <div class="stat"><b>${this._data.managed.length}</b><span>Managed</span></div>
-      <div class="stat"><b>${this._data.yaml.length}</b><span>In configuration.yaml</span></div>
-      <div class="stat"><b>${liveCount}</b><span>Live entities</span></div>`;
-
-    const tabs = this.querySelector("#tabs");
-    tabs.innerHTML = `
-      <div class="tab ${this._tab === "managed" ? "on" : ""}" data-t="managed">
-        Managed<small>${this._data.managed.length}</small></div>
-      <div class="tab ${this._tab === "yaml" ? "on" : ""}" data-t="yaml">
-        Config<small>${this._data.yaml.length}</small></div>`;
-    tabs.querySelectorAll(".tab").forEach((t) => {
-      t.onclick = () => {
-        this._tab = t.dataset.t;
-        this._render();
-      };
-    });
-
-    const list = this.querySelector("#list");
-    list.innerHTML = "";
-    const items = (
-      this._tab === "managed" ? this._data.managed : this._data.yaml
-    ).filter((s) => !this._q || s.yaml.toLowerCase().includes(this._q));
-
-    if (!items.length) {
-      list.innerHTML = `<div class="empty">
-        ${icon(this._tab === "managed" ? "mdi:playlist-plus" : "mdi:file-search-outline")}
-        ${
-          this._tab === "managed"
-            ? "No managed sensors yet.<br>Click <b>Add sensor</b> and paste some YAML."
-            : "Nothing found."
-        }</div>`;
-      return;
-    }
-
-    const grid = document.createElement("div");
-    grid.className = "grid";
-    list.appendChild(grid);
-
-    for (const s of items) {
-      const cfg = s.config;
-      const live = this._live(cfg, s.type);
-      const platform = (s.kind || "").includes("platform");
-      const card = document.createElement("div");
-      card.className = `card ${s.type === "binary_sensor" ? "binary" : ""} ${
-        platform ? "platform" : ""
-      }`;
-      const name = cfg.name ?? cfg.platform ?? "(unnamed)";
-      const chips = [
-        `<span class="chip">${esc(s.kind ?? s.type)}</span>`,
-        cfg.device_class && `<span class="chip neutral">${esc(cfg.device_class)}</span>`,
-        cfg.state_class && `<span class="chip neutral">${esc(cfg.state_class)}</span>`,
-        cfg.unit_of_measurement &&
-          `<span class="chip neutral">${esc(cfg.unit_of_measurement)}</span>`,
-      ].filter(Boolean);
-      card.innerHTML = `
-        <div class="top">
-          <div class="tile">${icon(this._iconFor(cfg, s.type))}</div>
-          <div class="title">
-            <div class="name">${esc(name)}</div>
-            <div class="sub">${esc(live ? live.entity_id : cfg.unique_id || "not loaded")}</div>
-          </div>
-          ${this._pill(live, cfg)}
-        </div>
-        <div class="chips">${chips.join("")}</div>
-        <details><summary>Show YAML</summary><pre>${esc(s.yaml)}</pre></details>
-        <div class="actions"></div>`;
-      const actions = card.querySelector(".actions");
-      const btn = (label, ic, cls, fn) => {
-        const b = document.createElement("button");
-        b.innerHTML = `${icon(ic)}${esc(label)}`;
-        b.className = `sm ${cls}`;
-        b.onclick = fn;
-        actions.appendChild(b);
-      };
-      if (this._tab === "managed") {
-        btn("Edit", "mdi:pencil", "edit", () =>
-          this._edit({
-            yaml: s.yaml,
-            type: s.type,
-            replace: { type: s.type, index: s.index },
-          }),
-        );
-        btn("Delete", "mdi:delete-outline", "danger", async () => {
-          if (!confirm(`Delete ${cfg.name}?`)) return;
-          try {
-            await this._hass.callWS({
-              type: "ysm/delete",
-              sensor_type: s.type,
-              index: s.index,
-            });
-            this._toast("Sensor deleted");
-          } catch (e) {
-            this._toast("Delete failed: " + e.message, true);
-          }
-          this._load();
-        });
-      } else if (s.copyable) {
-        btn("Copy to managed", "mdi:content-copy", "copy", () =>
-          this._edit({ yaml: s.yaml, type: s.type }),
-        );
-      }
-      if (!actions.children.length) actions.remove();
-      grid.appendChild(card);
-    }
-  }
-
-  _edit({ yaml = "", type = "sensor", replace }) {
-    const modal = this.querySelector("#modal");
-    modal.innerHTML = `
-      <div class="overlay">
-        <div class="modal">
-          <div class="mhead">${icon(replace ? "mdi:pencil" : "mdi:plus-circle")}
-            ${replace ? "Edit sensor" : "Add sensors"}</div>
-          <div class="mbody">
-            <textarea id="y" spellcheck="false" placeholder="${esc(PLACEHOLDER)}">${esc(yaml)}</textarea>
-            <div class="hint">
-              Accepts a single sensor, a list, <code>sensor:</code> /
-              <code>binary_sensor:</code> blocks, or a full <code>template:</code> block.
-              Quote templates or use a <code>|</code> block.
-              Pasted text is cleaned up automatically.
-            </div>
-            <div class="row">
-              <span class="hint">Entries without a wrapper are:</span>
-              <select id="t">
-                <option value="sensor">sensor</option>
-                <option value="binary_sensor">binary_sensor</option>
-              </select>
-            </div>
-            <div class="err" id="err"></div>
-            <div class="foot">
-              <button class="sec" id="format">${icon("mdi:auto-fix")}Format</button>
-              <button class="sec" id="cancel">Cancel</button>
-              <button id="save">${icon("mdi:content-save")}Save</button>
-            </div>
-          </div>
-        </div>
-      </div>`;
-    const ta = modal.querySelector("#y");
-    const errEl = modal.querySelector("#err");
-    modal.querySelector("#t").value = type;
-    ta.focus();
-    ta.onkeydown = (e) => {
-      if (e.key === "Tab") {
-        e.preventDefault();
-        document.execCommand("insertText", false, "  ");
-      }
-    };
-
-    const format = async (quiet) => {
-      try {
-        const r = await this._hass.callWS({
-          type: "ysm/format",
-          yaml: ta.value,
-        });
-        ta.value = r.yaml;
-        errEl.textContent =
-          !quiet && r.error ? "Cleaned, but: " + r.error : "";
-        if (!quiet && !r.error) this._toast("Formatted");
-      } catch (e) {
-        if (!quiet) errEl.textContent = e.message;
-      }
-    };
-    modal.querySelector("#format").onclick = () => format(false);
-    ta.addEventListener("paste", () => setTimeout(() => format(true), 0));
-
-    const close = () => (modal.innerHTML = "");
-    modal.querySelector("#cancel").onclick = close;
-    modal.querySelector(".overlay").onmousedown = (e) => {
-      if (e.target.classList.contains("overlay")) close();
-    };
-    modal.querySelector("#save").onclick = async () => {
-      errEl.textContent = "";
-      try {
-        const r = await this._hass.callWS({
-          type: "ysm/save",
-          yaml: ta.value,
-          default_type: modal.querySelector("#t").value,
-          ...(replace ? { replace } : {}),
-        });
-        close();
-        this._tab = "managed";
-        this._toast(`Saved ${r.saved} sensor${r.saved === 1 ? "" : "s"}`);
-        this._load();
-      } catch (e) {
-        errEl.textContent = e.message;
-      }
-    };
-  }
-}
-customElements.define("ysm-panel", YsmPanel);
+    display:fl
