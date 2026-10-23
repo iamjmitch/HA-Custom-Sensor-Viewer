@@ -113,7 +113,7 @@ def _restore_first_indent(text: str) -> str:
 def _clean_text(text: str) -> str:
     for old, new in _REPLACEMENTS.items():
         text = text.replace(old, new)
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "  ")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
     text = "\n".join(line.rstrip() for line in text.split("\n"))
     text = _restore_first_indent(text)
     return textwrap.dedent(text).strip("\n") + "\n"
@@ -122,7 +122,7 @@ def _clean_text(text: str) -> str:
 def _parse_text(hass, text: str):
     try:
         return parse_yaml(_clean_text(text), _secrets(hass))
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         raise ValueError(
             f"Invalid YAML: {err}. Tip: wrap templates in quotes, "
             "or use a | block."
@@ -136,7 +136,7 @@ def _format(hass, text: str) -> dict:
         if data is None:
             return {"yaml": cleaned}
         return {"yaml": _dump(data)}
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         return {"yaml": cleaned, "error": str(err)}
 
 
@@ -354,7 +354,7 @@ async def _change_config(hass, loc: dict, text: str | None) -> dict:
         await hass.services.async_call(
             "homeassistant", "check_config", blocking=True
         )
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         await hass.async_add_executor_job(_restore_config, hass)
         raise ValueError(
             f"Home Assistant rejected the change, so it was rolled back: {err}"
@@ -466,7 +466,7 @@ async def _respond(connection, msg, coro, code: str) -> None:
     except ValueError as err:
         connection.send_error(msg["id"], "invalid", str(err))
         return
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         connection.send_error(msg["id"], code, str(err))
         return
     connection.send_result(msg["id"], result)
@@ -486,7 +486,7 @@ async def ws_list(hass, connection, msg):
         )
         managed = await hass.async_add_executor_job(_read_managed, hass)
         managed_view = _managed_view(managed)
-    except Exception as err:  # noqa: BLE001
+    except Exception as err: # noqa: BLE001
         connection.send_error(msg["id"], "load_failed", str(err))
         return
     connection.send_result(msg["id"], {
@@ -585,54 +585,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         ws_config_save, ws_config_delete,
     ):
         websocket_api.async_register_command(hass, cmd)
-
-    www = str(Path(__file__).parent / "www")
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig("/ysm_static", www, False)]
-    )
-    await panel_custom.async_register_panel(
-        hass,
-        webcomponent_name="ysm-panel",
-        frontend_url_path="ysm",
-        module_url=f"/ysm_static/panel.js?v={VERSION}",
-        sidebar_title="Sensor Viewer",
-        sidebar_icon="mdi:code-braces",
-        require_admin=True,
-    )
-    return Truel.Required("index"): int,
-})
-@websocket_api.async_response
-async def ws_delete(hass, connection, msg):
-    try:
-        await hass.async_add_executor_job(
-            _delete, hass, msg["sensor_type"], msg["index"]
-        )
-        await _reload(hass)
-    except ValueError as err:
-        connection.send_error(msg["id"], "invalid", str(err))
-        return
-    except Exception as err:  # noqa: BLE001
-        connection.send_error(msg["id"], "delete_failed", str(err))
-        return
-    connection.send_result(msg["id"], {"ok": True})
-
-
-@websocket_api.require_admin
-@websocket_api.websocket_command({
-    vol.Required("type"): "ysm/format",
-    vol.Required("yaml"): str,
-})
-@websocket_api.async_response
-async def ws_format(hass, connection, msg):
-    result = await hass.async_add_executor_job(_format, hass, msg["yaml"])
-    connection.send_result(msg["id"], result)
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    websocket_api.async_register_command(hass, ws_list)
-    websocket_api.async_register_command(hass, ws_save)
-    websocket_api.async_register_command(hass, ws_delete)
-    websocket_api.async_register_command(hass, ws_format)
 
     www = str(Path(__file__).parent / "www")
     await hass.http.async_register_static_paths(
