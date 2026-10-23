@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import textwrap
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,7 +18,7 @@ from homeassistant.util.yaml.loader import Secrets, parse_yaml
 DOMAIN = "yaml_sensor_manager"
 DOMAIN_TEMPLATE = "template"
 TYPES = ("sensor", "binary_sensor")
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 
 def _jsonable(obj):
@@ -69,12 +70,44 @@ _REPLACEMENTS = {
     "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
 }
 
+_LIST_ITEM = re.compile(r"^-( +)[\w\"'][^:]*:")
+
+
+def _restore_first_indent(text: str) -> str:
+    """Fix pastes where the first line lost its leading whitespace.
+
+    Example: "- name: x" at column 0 followed by "        unique_id: y".
+    """
+    lines = text.split("\n")
+    first = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if first is None:
+        return text
+    head = lines[first]
+    match = _LIST_ITEM.match(head)
+    if not match:
+        return text
+    # Column where the first key starts, relative to the dash.
+    key_offset = 1 + len(match.group(1))
+    # Indent of the sibling keys (ignore other "- " lines).
+    rest = [
+        len(ln) - len(ln.lstrip(" "))
+        for ln in lines[first + 1:]
+        if ln.strip() and not ln.lstrip(" ").startswith("-")
+    ]
+    if not rest:
+        return text
+    missing = min(rest) - key_offset
+    if missing > 0:
+        lines[first] = " " * missing + head
+    return "\n".join(lines)
+
 
 def _clean_text(text: str) -> str:
     for old, new in _REPLACEMENTS.items():
         text = text.replace(old, new)
     text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "  ")
     text = "\n".join(line.rstrip() for line in text.split("\n"))
+    text = _restore_first_indent(text)
     return textwrap.dedent(text).strip("\n") + "\n"
 
 
