@@ -17,7 +17,7 @@ from homeassistant.util.yaml.loader import Secrets, parse_yaml
 DOMAIN = "yaml_sensor_manager"
 DOMAIN_TEMPLATE = "template"
 TYPES = ("sensor", "binary_sensor")
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 def _jsonable(obj):
@@ -64,7 +64,7 @@ def _secrets(hass) -> Secrets:
 
 
 _REPLACEMENTS = {
-    "\u00a0": "", "\u2007": " ", "\u202f": " ",
+    "\u00a0": " ", "\u2007": " ", "\u202f": " ",
     "\u200b": "", "\u200c": "", "\u200d": "", "\ufeff": "",
     "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
 }
