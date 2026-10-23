@@ -1,3 +1,4 @@
+// ===== panel.js : PART 1 of 2 =====
 const esc = (s) =>
   String(s ?? "").replace(
     /[&<>"']/g,
@@ -157,6 +158,8 @@ const CSS = `
   .card.binary{--accent:var(--ysm-purple)}
   .card.platform{--accent:var(--ysm-orange)}
   .top{display:flex;gap:12px;align-items:center}
+  .card.live .top{cursor:pointer}
+  .card.live .top:hover .name{text-decoration:underline}
   .tile{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;
     flex:none;color:var(--accent);
     background:color-mix(in srgb,var(--accent) 16%,transparent)}
@@ -183,6 +186,22 @@ const CSS = `
     line-height:1.5;max-height:300px;
     background:var(--secondary-background-color);border:1px solid var(--divider-color)}
   .actions{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+
+  .group{margin-bottom:12px}
+  .ghead{display:flex;align-items:center;gap:10px;padding:10px 14px;
+    border-radius:12px;cursor:pointer;user-select:none;margin-bottom:10px;
+    background:var(--secondary-background-color);
+    border:1px solid var(--divider-color);transition:background .15s}
+  .ghead:hover{border-color:var(--ysm-purple)}
+  .ghead ha-icon{--mdc-icon-size:22px;color:var(--ysm-purple);
+    transition:transform .15s}
+  .ghead b{flex:1;font-size:15px;text-transform:capitalize}
+  .gcount{font-size:12px;font-weight:600;padding:2px 10px;border-radius:20px;
+    color:#fff;background:var(--ysm-purple)}
+  .glive{font-size:12px;color:var(--secondary-text-color)}
+  .group.closed .ghead ha-icon{transform:rotate(-90deg)}
+  .group.closed .grid{display:none}
+  .group.closed .ghead{margin-bottom:0}
 
   .empty{text-align:center;padding:48px 16px;color:var(--secondary-text-color);
     border:2px dashed var(--divider-color);border-radius:var(--ysm-radius)}
@@ -239,6 +258,10 @@ const CSS = `
 
 const icon = (name) => `<ha-icon icon="${esc(name)}"></ha-icon>`;
 
+// ===== END OF PART 1 : Part 2 starts at "class YsmPanel" =====
+// ===== panel.js : PART 2 of 2 =====
+const COLLAPSE_KEY = "ysm_collapsed";
+
 class YsmPanel extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
@@ -250,6 +273,14 @@ class YsmPanel extends HTMLElement {
     this._tab = "managed";
     this._q = "";
     this._error = "";
+    this._keys = [];
+    try {
+      this._collapsed = new Set(
+        JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]"),
+      );
+    } catch (e) {
+      this._collapsed = new Set();
+    }
     this._data = { yaml: [], managed: [], restart: [], packages_ok: true };
     this.innerHTML = `${CSS}
       <div class="wrap">
@@ -269,6 +300,8 @@ class YsmPanel extends HTMLElement {
             <input class="search" id="q" placeholder="Search name, id, template...">
           </div>
           <div class="tabs" id="tabs"></div>
+          <button class="sec sm" id="collapse">${icon("mdi:unfold-less-horizontal")}Collapse all</button>
+          <button class="sec sm" id="expand">${icon("mdi:unfold-more-horizontal")}Expand all</button>
         </div>
         <div id="banner"></div>
         <div id="list"></div>
@@ -278,6 +311,8 @@ class YsmPanel extends HTMLElement {
     this.querySelector("#add").onclick = () => this._edit({});
     this.querySelector("#refresh").onclick = () => this._load();
     this.querySelector("#power").onclick = () => this._power();
+    this.querySelector("#collapse").onclick = () => this._toggleAll(true);
+    this.querySelector("#expand").onclick = () => this._toggleAll(false);
     this.querySelector("#q").oninput = (e) => {
       this._q = e.target.value.toLowerCase();
       this._render();
@@ -407,6 +442,142 @@ class YsmPanel extends HTMLElement {
     return `<span class="pill ${cls}">${esc(st)}${unit ? " " + esc(unit) : ""}</span>`;
   }
 
+  _group(s) {
+    const cfg = s.config || {};
+    const label = String(cfg.name ?? cfg.platform ?? "").trim();
+    const word = label.split(/\s+/)[0].toLowerCase();
+    return word || "other";
+  }
+
+  _saveCollapsed() {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...this._collapsed]));
+    } catch (e) {
+      /* storage unavailable */
+    }
+  }
+
+  _toggleAll(collapse) {
+    for (const k of this._keys) {
+      if (collapse) this._collapsed.add(k);
+      else this._collapsed.delete(k);
+    }
+    this._saveCollapsed();
+    this._render();
+  }
+
+  _openHistory(entityId) {
+    this.dispatchEvent(
+      new CustomEvent("hass-more-info", {
+        detail: { entityId },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  _card(s) {
+    const cfg = s.config;
+    const live = this._live(cfg, s.type);
+    const platform = (s.kind || "").includes("platform");
+    const card = document.createElement("div");
+    card.className = `card ${s.type === "binary_sensor" ? "binary" : ""} ${
+      platform ? "platform" : ""
+    } ${live ? "live" : ""}`;
+    const name = cfg.name ?? cfg.platform ?? "(unnamed)";
+    const chips = [
+      `<span class="chip">${esc(s.kind ?? s.type)}</span>`,
+      cfg.device_class &&
+        `<span class="chip neutral">${esc(cfg.device_class)}</span>`,
+      cfg.state_class &&
+        `<span class="chip neutral">${esc(cfg.state_class)}</span>`,
+      cfg.unit_of_measurement &&
+        `<span class="chip neutral">${esc(cfg.unit_of_measurement)}</span>`,
+    ].filter(Boolean);
+    card.innerHTML = `
+      <div class="top" ${live ? 'title="Show history"' : ""}>
+        <div class="tile">${icon(this._iconFor(cfg, s.type))}</div>
+        <div class="title">
+          <div class="name">${esc(name)}</div>
+          <div class="sub">${esc(live ? live.entity_id : cfg.unique_id || "not loaded")}</div>
+        </div>
+        ${this._pill(live, cfg)}
+      </div>
+      <div class="chips">${chips.join("")}</div>
+      <details><summary>Show YAML</summary><pre>${esc(s.yaml)}</pre></details>
+      <div class="actions"></div>`;
+    if (live) {
+      card.querySelector(".top").onclick = () =>
+        this._openHistory(live.entity_id);
+    }
+    const actions = card.querySelector(".actions");
+    const btn = (label, ic, cls, fn) => {
+      const b = document.createElement("button");
+      b.innerHTML = `${icon(ic)}${esc(label)}`;
+      b.className = `sm ${cls}`;
+      b.onclick = fn;
+      actions.appendChild(b);
+    };
+
+    if (this._tab === "managed") {
+      btn("Edit", "mdi:pencil", "edit", () =>
+        this._edit({
+          yaml: s.yaml,
+          type: s.type,
+          replace: { type: s.type, index: s.index },
+        }),
+      );
+      btn("Delete", "mdi:delete-outline", "danger", async () => {
+        if (!confirm(`Delete ${cfg.name}?`)) return;
+        try {
+          await this._hass.callWS({
+            type: "ysm/delete",
+            sensor_type: s.type,
+            index: s.index,
+          });
+          this._toast("Sensor deleted");
+        } catch (e) {
+          this._toast("Delete failed: " + e.message, true);
+        }
+        this._load();
+      });
+    } else {
+      if (s.loc) {
+        btn("Edit", "mdi:pencil", "edit", () =>
+          this._edit({ yaml: s.yaml, type: s.type, loc: s.loc }),
+        );
+        btn("Delete", "mdi:delete-outline", "danger", async () => {
+          if (
+            !confirm(
+              `Delete ${name} from configuration.yaml?\n` +
+                "A backup is saved as configuration.yaml.ysm.bak.",
+            )
+          )
+            return;
+          try {
+            const r = await this._hass.callWS({
+              type: "ysm/config_delete",
+              loc: s.loc,
+            });
+            this._toast(
+              r.restart ? "Deleted. Restart needed" : "Sensor deleted",
+            );
+          } catch (e) {
+            this._toast("Delete failed: " + e.message, true);
+          }
+          this._load();
+        });
+      }
+      if (s.copyable) {
+        btn("Copy to managed", "mdi:content-copy", "copy", () =>
+          this._edit({ yaml: s.yaml, type: s.type }),
+        );
+      }
+    }
+    if (!actions.children.length) actions.remove();
+    return card;
+  }
+
   _render() {
     this._banners();
     const all = [...this._data.managed, ...this._data.yaml];
@@ -437,6 +608,7 @@ class YsmPanel extends HTMLElement {
     ).filter((s) => !this._q || s.yaml.toLowerCase().includes(this._q));
 
     if (!items.length) {
+      this._keys = [];
       list.innerHTML = `<div class="empty">
         ${icon(this._tab === "managed" ? "mdi:playlist-plus" : "mdi:file-search-outline")}
         ${
@@ -447,106 +619,46 @@ class YsmPanel extends HTMLElement {
       return;
     }
 
-    const grid = document.createElement("div");
-    grid.className = "grid";
-    list.appendChild(grid);
-
+    const groups = new Map();
     for (const s of items) {
-      const cfg = s.config;
-      const live = this._live(cfg, s.type);
-      const platform = (s.kind || "").includes("platform");
-      const card = document.createElement("div");
-      card.className = `card ${s.type === "binary_sensor" ? "binary" : ""} ${
-        platform ? "platform" : ""
-      }`;
-      const name = cfg.name ?? cfg.platform ?? "(unnamed)";
-      const chips = [
-        `<span class="chip">${esc(s.kind ?? s.type)}</span>`,
-        cfg.device_class &&
-          `<span class="chip neutral">${esc(cfg.device_class)}</span>`,
-        cfg.state_class &&
-          `<span class="chip neutral">${esc(cfg.state_class)}</span>`,
-        cfg.unit_of_measurement &&
-          `<span class="chip neutral">${esc(cfg.unit_of_measurement)}</span>`,
-      ].filter(Boolean);
-      card.innerHTML = `
-        <div class="top">
-          <div class="tile">${icon(this._iconFor(cfg, s.type))}</div>
-          <div class="title">
-            <div class="name">${esc(name)}</div>
-            <div class="sub">${esc(live ? live.entity_id : cfg.unique_id || "not loaded")}</div>
-          </div>
-          ${this._pill(live, cfg)}
-        </div>
-        <div class="chips">${chips.join("")}</div>
-        <details><summary>Show YAML</summary><pre>${esc(s.yaml)}</pre></details>
-        <div class="actions"></div>`;
-      const actions = card.querySelector(".actions");
-      const btn = (label, ic, cls, fn) => {
-        const b = document.createElement("button");
-        b.innerHTML = `${icon(ic)}${esc(label)}`;
-        b.className = `sm ${cls}`;
-        b.onclick = fn;
-        actions.appendChild(b);
-      };
+      const g = this._group(s);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(s);
+    }
+    const names = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+    this._keys = names.map((g) => `${this._tab}:${g}`);
+    const searching = !!this._q;
 
-      if (this._tab === "managed") {
-        btn("Edit", "mdi:pencil", "edit", () =>
-          this._edit({
-            yaml: s.yaml,
-            type: s.type,
-            replace: { type: s.type, index: s.index },
-          }),
-        );
-        btn("Delete", "mdi:delete-outline", "danger", async () => {
-          if (!confirm(`Delete ${cfg.name}?`)) return;
-          try {
-            await this._hass.callWS({
-              type: "ysm/delete",
-              sensor_type: s.type,
-              index: s.index,
-            });
-            this._toast("Sensor deleted");
-          } catch (e) {
-            this._toast("Delete failed: " + e.message, true);
-          }
-          this._load();
-        });
-      } else {
-        if (s.loc) {
-          btn("Edit", "mdi:pencil", "edit", () =>
-            this._edit({ yaml: s.yaml, type: s.type, loc: s.loc }),
-          );
-          btn("Delete", "mdi:delete-outline", "danger", async () => {
-            if (
-              !confirm(
-                `Delete ${name} from configuration.yaml?\n` +
-                  "A backup is saved as configuration.yaml.ysm.bak.",
-              )
-            )
-              return;
-            try {
-              const r = await this._hass.callWS({
-                type: "ysm/config_delete",
-                loc: s.loc,
-              });
-              this._toast(
-                r.restart ? "Deleted. Restart needed" : "Sensor deleted",
-              );
-            } catch (e) {
-              this._toast("Delete failed: " + e.message, true);
-            }
-            this._load();
-          });
-        }
-        if (s.copyable) {
-          btn("Copy to managed", "mdi:content-copy", "copy", () =>
-            this._edit({ yaml: s.yaml, type: s.type }),
-          );
-        }
-      }
-      if (!actions.children.length) actions.remove();
-      grid.appendChild(card);
+    for (const g of names) {
+      const key = `${this._tab}:${g}`;
+      const members = groups.get(g).sort((a, b) =>
+        String(a.config.name ?? "").localeCompare(String(b.config.name ?? "")),
+      );
+      const liveN = members.filter((s) => this._live(s.config, s.type)).length;
+      const closed = !searching && this._collapsed.has(key);
+
+      const wrap = document.createElement("div");
+      wrap.className = `group ${closed ? "closed" : ""}`;
+      const head = document.createElement("div");
+      head.className = "ghead";
+      head.innerHTML = `${icon("mdi:chevron-down")}
+        <b>${esc(g)}</b>
+        <span class="glive">${liveN} live</span>
+        <span class="gcount">${members.length}</span>`;
+      head.onclick = () => {
+        if (this._q) return;
+        if (this._collapsed.has(key)) this._collapsed.delete(key);
+        else this._collapsed.add(key);
+        this._saveCollapsed();
+        wrap.classList.toggle("closed", this._collapsed.has(key));
+      };
+      wrap.appendChild(head);
+
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      for (const s of members) grid.appendChild(this._card(s));
+      wrap.appendChild(grid);
+      list.appendChild(wrap);
     }
   }
 
