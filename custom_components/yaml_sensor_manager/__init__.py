@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 import voluptuous as vol
@@ -15,7 +16,24 @@ from homeassistant.util.yaml.loader import Secrets, parse_yaml
 DOMAIN = "yaml_sensor_manager"
 DOMAIN_TEMPLATE = "template"
 TYPES = ("sensor", "binary_sensor")
-VERSION = "0.2.0"
+VERSION = "0.2.1"
+
+
+def _jsonable(obj):
+    """Convert HA's YAML node types into plain Python types."""
+    if isinstance(obj, Mapping):
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_jsonable(v) for v in obj]
+    if isinstance(obj, bool) or obj is None:
+        return obj
+    if isinstance(obj, int):
+        return int(obj)
+    if isinstance(obj, float):
+        return float(obj)
+    if isinstance(obj, str):
+        return str(obj)
+    return str(obj)
 
 
 class _Dumper(yaml.SafeDumper):
@@ -24,16 +42,21 @@ class _Dumper(yaml.SafeDumper):
 
 def _str_rep(dumper, data):
     style = "|" if "\n" in data else None
-    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+    return dumper.represent_scalar(
+        "tag:yaml.org,2002:str", str(data), style=style
+    )
 
 
-_Dumper.add_representer(str, _str_rep)
+_Dumper.add_multi_representer(str, _str_rep)
 
 
 def _dump(data) -> str:
     return yaml.dump(
-        data, Dumper=_Dumper, sort_keys=False,
-        allow_unicode=True, default_flow_style=False,
+        _jsonable(data),
+        Dumper=_Dumper,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
     )
 
 
@@ -53,7 +76,7 @@ def _read_managed(hass) -> dict[str, list]:
     data = load_yaml(path, _secrets(hass)) or {}
     for block in data.get("template", []) or []:
         for t in TYPES:
-            out[t].extend(block.get(t, []) or [])
+            out[t].extend(_jsonable(block.get(t, []) or []))
     return out
 
 
@@ -74,16 +97,6 @@ def _load_config_yaml(hass) -> dict:
         return parse_yaml(f, _secrets(hass)) or {}
 
 
-def _jsonable(obj):
-    if isinstance(obj, dict):
-        return {str(k): _jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_jsonable(v) for v in obj]
-    if isinstance(obj, (str, int, float, bool, type(None))):
-        return obj
-    return str(obj)
-
-
 def _scan_config(hass) -> list[dict]:
     cfg = _load_config_yaml(hass)
     items = []
@@ -91,22 +104,26 @@ def _scan_config(hass) -> list[dict]:
     def add(kind, typ, entry, copyable):
         entry = _jsonable(entry)
         items.append({
-            "kind": kind, "type": typ, "config": entry,
-            "yaml": _dump(entry), "copyable": copyable,
+            "kind": kind,
+            "type": typ,
+            "config": entry,
+            "yaml": _dump(entry),
+            "copyable": copyable,
         })
 
     for domain in TYPES:
         val = cfg.get(domain) or []
         for e in val if isinstance(val, list) else [val]:
-            if isinstance(e, dict):
+            if isinstance(e, Mapping):
                 add(f"{domain} (platform)", domain, e, False)
+
     tpl = cfg.get("template") or []
     for block in tpl if isinstance(tpl, list) else [tpl]:
-        if not isinstance(block, dict):
+        if not isinstance(block, Mapping):
             continue
         for domain in TYPES:
             for e in block.get(domain, []) or []:
-                if isinstance(e, dict):
+                if isinstance(e, Mapping):
                     add(f"template {domain}", domain, e, True)
     return items
 
@@ -116,8 +133,12 @@ def _managed_view(managed: dict[str, list]) -> list[dict]:
     for t in TYPES:
         for i, s in enumerate(managed[t]):
             s = _jsonable(s)
-            out.append({"type": t, "index": i, "config": s,
-                        "yaml": _dump(s)})
+            out.append({
+                "type": t,
+                "index": i,
+                "config": s,
+                "yaml": _dump(s),
+            })
     return out
 
 
@@ -129,7 +150,7 @@ def _normalize(data, default_type: str) -> dict[str, list]:
         if isinstance(node, list):
             for n in node:
                 walk(n, dtype)
-        elif isinstance(node, dict):
+        elif isinstance(node, Mapping):
             if "template" in node:
                 walk(node["template"], dtype)
                 return
@@ -207,12 +228,13 @@ async def ws_list(hass, connection, msg):
     try:
         yaml_items = await hass.async_add_executor_job(_scan_config, hass)
         managed = await hass.async_add_executor_job(_read_managed, hass)
+        managed_view = _managed_view(managed)
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "load_failed", str(err))
         return
     connection.send_result(msg["id"], {
         "yaml": yaml_items,
-        "managed": _managed_view(managed),
+        "managed": managed_view,
     })
 
 
@@ -257,6 +279,9 @@ async def ws_delete(hass, connection, msg):
         await _reload(hass)
     except ValueError as err:
         connection.send_error(msg["id"], "invalid", str(err))
+        return
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "delete_failed", str(err))
         return
     connection.send_result(msg["id"], {"ok": True})
 
