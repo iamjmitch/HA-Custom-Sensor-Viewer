@@ -9,6 +9,7 @@ from homeassistant.components import panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 from homeassistant.util.yaml import dump, load_yaml
+from homeassistant.util.yaml.loader import Secrets, parse_yaml
 
 DOMAIN = "yaml_sensor_manager"
 FIELDS = ("name", "state", "unit_of_measurement", "device_class",
@@ -37,11 +38,17 @@ def _write_managed(hass, sensors: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write("# Managed by YAML Sensor Manager\n" + dump(content))
 
+def _load_config_yaml(hass) -> dict:
+    path = Path(hass.config.path("configuration.yaml"))
+    secrets = Secrets(Path(hass.config.config_dir))
+    with open(path, encoding="utf-8") as f:
+        return parse_yaml(f, secrets) or {}
+              
 
 def _scan_config(hass) -> list[dict]:
-    cfg = load_yaml(hass.config.path("configuration.yaml")) or {}
+    cfg = _load_config_yaml(hass)
     items = []
-
+          
     def add(kind, entry):
         items.append({"kind": kind, "config": entry})
 
@@ -147,3 +154,4 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         require_admin=True,
     )
     return True
+          
