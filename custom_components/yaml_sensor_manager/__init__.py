@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import textwrap
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from homeassistant.util.yaml.loader import Secrets, parse_yaml
 DOMAIN = "yaml_sensor_manager"
 DOMAIN_TEMPLATE = "template"
 TYPES = ("sensor", "binary_sensor")
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 
 def _jsonable(obj):
@@ -31,8 +32,6 @@ def _jsonable(obj):
         return int(obj)
     if isinstance(obj, float):
         return float(obj)
-    if isinstance(obj, str):
-        return str(obj)
     return str(obj)
 
 
@@ -62,6 +61,33 @@ def _dump(data) -> str:
 
 def _secrets(hass) -> Secrets:
     return Secrets(Path(hass.config.config_dir))
+
+
+_REPLACEMENTS = {
+    "\u00a0": "", "\u2007": " ", "\u202f": " ",
+    "\u200b": "", "\u200c": "", "\u200d": "", "\ufeff": "",
+    "\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'",
+}
+
+
+def _clean_text(text: str) -> str:
+    for old, new in _REPLACEMENTS.items():
+        text = text.replace(old, new)
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\t", "  ")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return textwrap.dedent(text).strip("\n") + "\n"
+
+
+def _format(hass, text: str) -> dict:
+    cleaned = _clean_text(text)
+    try:
+        data = parse_yaml(cleaned, _secrets(hass))
+        if data is None:
+            return {"yaml": cleaned}
+        return {"yaml": _dump(data)}
+    except Exception as err:  # noqa: BLE001
+        # Not valid YAML yet (e.g. unquoted template): return cleaned text
+        return {"yaml": cleaned, "error": str(err)}
 
 
 def _managed_path(hass: HomeAssistant) -> str:
@@ -174,7 +200,7 @@ def _same(a: dict, b: dict) -> bool:
 
 def _save(hass, text: str, default_type: str, replace: dict | None) -> int:
     try:
-        data = parse_yaml(text, _secrets(hass))
+        data = parse_yaml(_clean_text(text), _secrets(hass))
     except Exception as err:  # noqa: BLE001
         raise ValueError(
             f"Invalid YAML: {err}. Tip: wrap templates in quotes, "
@@ -286,10 +312,22 @@ async def ws_delete(hass, connection, msg):
     connection.send_result(msg["id"], {"ok": True})
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "ysm/format",
+    vol.Required("yaml"): str,
+})
+@websocket_api.async_response
+async def ws_format(hass, connection, msg):
+    result = await hass.async_add_executor_job(_format, hass, msg["yaml"])
+    connection.send_result(msg["id"], result)
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     websocket_api.async_register_command(hass, ws_list)
     websocket_api.async_register_command(hass, ws_save)
     websocket_api.async_register_command(hass, ws_delete)
+    websocket_api.async_register_command(hass, ws_format)
 
     www = str(Path(__file__).parent / "www")
     await hass.http.async_register_static_paths(
